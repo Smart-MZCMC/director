@@ -1,0 +1,49 @@
+name: CI
+
+# 导播端：Flutter 桌面应用（Windows，对应根目录 start.bat 的 `flutter run -d windows`）
+# 该工程未启用 web 平台，因此只在 Windows runner 上构建。
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and build (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # pubspec.lock 要求 flutter >= 3.44.0，stable 渠道即满足。
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: director-windows
+          path: build/windows/x64/runner/Release/
+          if-no-files-found: error
+          retention-days: 7
