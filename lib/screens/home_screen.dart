@@ -33,7 +33,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<InterviewPoint> _interviewPoints = [];
   bool _hasLock = false;
   bool _isConnected = false;
-  List<ChatMessage> _chatMessages = [];
+  final List<ChatMessage> _chatMessages = [];
   String? _nextShotPreview; // 即将播送的内容（点击预设按钮时设置）
 
   @override
@@ -55,7 +55,6 @@ class _HomeScreenState extends State<HomeScreen> {
         final payload = msg['payload'];
         setState(() => _nextShotPreview = payload['content'] ?? '');
       } else if (type == 'confirm_switch') {
-        final payload = msg['payload'];
         setState(() => _nextShotPreview = null);
       } else if (type == 'chat') {
         final payload = msg['payload'];
