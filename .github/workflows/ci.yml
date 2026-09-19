@@ -15,7 +15,7 @@ jobs:
     name: Test and build (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # pubspec.lock 要求 flutter >= 3.44.0，stable 渠道即满足。
       - name: Setup Flutter
@@ -40,7 +40,7 @@ jobs:
         run: flutter build windows --release
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: director-windows
           path: build/windows/x64/runner/Release/
@@ -51,7 +51,7 @@ jobs:
     name: Build (Android)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -69,7 +69,7 @@ jobs:
         run: flutter build apk --release
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: director-android
           path: build/app/outputs/flutter-apk/app-release.apk
