@@ -34,7 +34,20 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _hasLock = false;
   bool _isConnected = false;
   final List<ChatMessage> _chatMessages = [];
-  String? _nextShotPreview; // 即将播送的内容（点击预设按钮时设置）
+
+  /// 当前正在播送的机位。每次切台都会连同 [_nextShotPreview] 一起上报给后端。
+  String _currentPlaying = '';
+
+  /// 预览中的机位（点预设按钮设置），滑动确认后即为「即将切台」。
+  String? _nextShotPreview;
+
+  /// 滑动确认是否已经发出「即将切台」。
+  ///
+  /// 只有在已预告、且尚未确认已切的情况下，「确认已切」按钮才可用——
+  /// 否则会把同一个机位重复确认成正在播送。
+  bool get _pendingConfirm =>
+      _hasLock && _nextShotPreview != null && _nextShotPreview != _currentPlaying;
+
 
   @override
   void initState() {
@@ -51,11 +64,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
     _wsService.messageStream.listen((msg) {
       final type = msg['type'];
-      if (type == 'next_shot') {
-        final payload = msg['payload'];
-        setState(() => _nextShotPreview = payload['content'] ?? '');
-      } else if (type == 'confirm_switch') {
-        setState(() => _nextShotPreview = null);
+      if (type == 'shot_state') {
+        // 后端把切台状态原样回给项目内其他角色；本端是发送方，
+        // 自己的状态以本地为准，这里只用于兜底同步。
+        final payload = msg['payload'] ?? const {};
+        final current = (payload['current'] ?? '') as String;
+        final next = (payload['next'] ?? '') as String;
+        if (msg['sender_id'] == widget.user['id']) return;
+        setState(() {
+          _currentPlaying = current;
+          _nextShotPreview = next.isEmpty ? null : next;
+        });
       } else if (type == 'chat') {
         final payload = msg['payload'];
         final senderId = msg['sender_id'];
@@ -122,6 +141,8 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _selectedProject = project;
       _nextShotPreview = null;
+      // 换项目意味着换一套切台状态，本地记录不再成立。
+      _currentPlaying = '';
     });
 
     // 断开旧连接，用正确的 projectId 重新连接
@@ -182,17 +203,45 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // 点击预设按钮：只设置"即将播送"预览，不发送 WS
+  // 点击预设按钮：只设置本地预览，不发 WS。
+  // 真正下发要等滑动确认，避免误触。
   void _selectPreset(String label) {
     setState(() => _nextShotPreview = label);
   }
 
-  // 滑动确认：将预览内容正式推送到"正在播送"
+  /// 滑动确认：下发「即将切台」。
+  ///
+  /// 上报时把 [current] 一起带上——后端要求每次切台都给出完整的
+  /// 「当前播送 + 即将切台」，接收端才能直接渲染而不必自己推断。
+  /// 此时 [_currentPlaying] 不变，因为画面还没真的切过去。
   void _onSlideConfirm(String content) {
     if (_selectedProject == null) return;
-    _wsService.sendConfirmSwitch(_selectedProject!.id, content);
-    setState(() => _nextShotPreview = null);
-    _showToast('已推送: $content');
+    _wsService.sendShotState(
+      _selectedProject!.id,
+      current: _currentPlaying,
+      next: content,
+    );
+    setState(() => _nextShotPreview = content);
+    _showToast('即将切台: $content');
+  }
+
+  /// 确认已切：把预览中的机位提升为「当前播送」。
+  ///
+  /// 上报时 next 传空串，表示已经切完、没有待切项；后端据此让
+  /// 解说端在「正在播送」和「即将播送」之间切换。
+  void _onConfirmSwitched() {
+    final target = _nextShotPreview;
+    if (_selectedProject == null || target == null || target.isEmpty) return;
+    _wsService.sendShotState(
+      _selectedProject!.id,
+      current: target,
+      next: '',
+    );
+    setState(() {
+      _currentPlaying = target;
+      _nextShotPreview = null;
+    });
+    _showToast('正在播送: $target');
   }
 
   void _sendChatMessage() {
@@ -356,10 +405,38 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  // 滑动确认：将选中的内容推送到"正在播送"
+                  // 当前播送 / 即将切台状态条
+                  _buildShotStateBar(),
+                  const SizedBox(height: 8),
+                  // 滑动确认：下发「即将切台」
                   SlideToConfirm(
                     onConfirm: _onSlideConfirm,
                     preview: _nextShotPreview,
+                    enabled: _hasLock,
+                  ),
+                  const SizedBox(height: 8),
+                  // 确认已切：把待切机位提升为「当前播送」
+                  SizedBox(
+                    width: double.infinity,
+                    height: 44,
+                    child: ElevatedButton.icon(
+                      onPressed: _pendingConfirm ? _onConfirmSwitched : null,
+                      icon: const Icon(Icons.check_circle_outline),
+                      label: Text(
+                        _nextShotPreview == null
+                            ? '确认已切'
+                            : '确认已切: $_nextShotPreview',
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green.shade700,
+                        disabledBackgroundColor: Colors.grey.shade800,
+                        disabledForegroundColor: Colors.grey.shade600,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -374,6 +451,48 @@ class _HomeScreenState extends State<HomeScreen> {
               inputController: _chatInputController,
               scrollController: _chatScrollController,
               onSend: _sendChatMessage,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 当前播送 / 即将切台状态条。
+  ///
+  /// 与解说端保持同一套语义：有待切项时显示「即将切台」，
+  /// 确认已切后回到「当前播送」，让导播一眼看清自己下发了什么。
+  Widget _buildShotStateBar() {
+    final pending = _nextShotPreview;
+    final hasPending = pending != null && pending.isNotEmpty;
+    final label = hasPending ? '即将切台' : '当前播送';
+    final value = hasPending ? pending : (_currentPlaying.isEmpty ? '未指定' : _currentPlaying);
+    final color = hasPending ? Colors.orange.shade800 : Colors.blueGrey.shade800;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Text(
+            label,
+            style: const TextStyle(color: Colors.white70, fontSize: 13),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
         ],

@@ -57,6 +57,10 @@ class WebSocketService {
     }
   }
 
+  /// 保活心跳。
+  ///
+  /// 后端在入库之前就会丢弃 heartbeat，所以它不会进 messages 表、
+  /// 不会计入项目消息统计、也不会广播给其他端——纯粹用来维持连接。
   void _startHeartbeat() {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(const Duration(seconds: 10), (_) {
@@ -76,12 +80,14 @@ class WebSocketService {
     _reconnectTimer = Timer(delay, _doConnect);
   }
 
-  void sendNextShot(int projectId, String content) {
-    _send('next_shot', projectId, {'content': content});
-  }
-
-  void sendConfirmSwitch(int projectId, String content) {
-    _send('confirm_switch', projectId, {'content': content});
+  /// 上报切台状态。
+  ///
+  /// 后端只认 `shot_state` 一种切台消息，每次都必须把「当前播送」和
+  /// 「即将切台」一起带上，接收端不需要自己推断：
+  ///  - [current] 当前正在播送的机位
+  ///  - [next]    本次要切过去的机位；传空串表示已经切完、进入正在播送状态
+  void sendShotState(int projectId, {required String current, required String next}) {
+    _send('shot_state', projectId, {'current': current, 'next': next});
   }
 
   void sendChat(int projectId, String content) {

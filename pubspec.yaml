@@ -1,7 +1,7 @@
 name: director
 description: "导播端 - 控制权管理、推送下一项、内部通信"
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.0+1
 
 environment:
   sdk: ^3.12.2
@@ -12,7 +12,10 @@ dependencies:
   cupertino_icons: ^1.0.8
   web_socket_channel: ^3.0.2
   http: ^1.3.0
-  shared_preferences: ^2.5.3
+# shared_preferences 已移除：代码里从未 import 过它（JWT 只存在内存里，
+# 登录态不跨进程保留）。留着会拖进 shared_preferences_android 这个原生模块，
+# 而它在 Windows 上构建时会让 Kotlin 增量缓存崩掉（Could not close
+# incremental caches ... .tab），整个 assembleRelease 失败。
 
 dev_dependencies:
   flutter_test:
