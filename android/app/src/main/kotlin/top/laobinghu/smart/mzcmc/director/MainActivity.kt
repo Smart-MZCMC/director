@@ -1,4 +1,4 @@
-package com.example.director
+package top.laobinghu.smart.mzcmc.director
 
 import io.flutter.embedding.android.FlutterActivity
 
