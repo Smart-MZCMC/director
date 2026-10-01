@@ -86,7 +86,9 @@ class ApiService {
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
     }
-    throw Exception('登录失败: ${response.body}');
+    // 状态码必须带上：界面要靠它区分「账号密码不对」和「服务端出了别的问题」。
+    // 少了它，所有失败都显示成同一个提示，排查方向会从一开始就错。
+    throw Exception('登录失败 (HTTP ${response.statusCode}): ${response.body}');
   }
 
   /// 项目列表。

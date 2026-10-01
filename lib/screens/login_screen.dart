@@ -24,7 +24,10 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _error;
 
   Future<void> _login() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final result = await _apiService.login(
         _usernameController.text.trim(),
@@ -43,10 +46,34 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       );
     } catch (e) {
-      setState(() { _error = '登录失败，请检查用户名和密码'; });
+      // 不能再一律说「请检查用户名和密码」。
+      //
+      // 之前所有异常都走这一句话，于是网络问题（服务器地址写错、没网、
+      // release 包缺 INTERNET 权限）也显示成「密码错误」——账号密码明明是对的，
+      // 于是排查方向从一开始就错了。真实的 1.4.x 现场就是这样被带偏的：
+      // debug 版能登录、release 版不行，真正原因是权限而不是口令。
+      setState(() {
+        _error = _describeError(e);
+      });
     } finally {
-      setState(() { _loading = false; });
+      if (mounted) setState(() { _loading = false; });
     }
+  }
+
+  /// 把登录失败的原因分成「服务端拒绝」与「联系不上服务端」。
+  ///
+  /// 这两类要分开：前者是账号密码问题，改了就能登进去；后者是地址、网络或
+  /// 客户端权限问题，改密码没有任何用处。把两者混成一句话只会让人往错的方向查。
+  String _describeError(Object error) {
+    final text = error.toString();
+    // ApiService 在服务端明确拒绝时抛出带状态码的异常。
+    final isCredentialIssue = text.contains('401') || text.contains('403');
+    if (isCredentialIssue) return '登录失败，请检查用户名和密码';
+
+    // 连不上：这类错误信息里通常带着 SocketException / ClientException /
+    // TimeoutException，把它原文带出来才有排查价值。
+    return '无法连接服务器（$text）。\n'
+        '这通常不是账号密码问题，请检查服务器地址与网络连通性。';
   }
 
   @override
