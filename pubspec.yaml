@@ -1,7 +1,7 @@
 name: director
 description: "导播端 - 控制权管理、推送下一项、内部通信"
 publish_to: 'none'
-version: 1.1.0+1
+version: 1.2.0+1
 
 environment:
   sdk: ^3.12.2
