@@ -1,7 +1,7 @@
 name: director
 description: "导播端 - 控制权管理、推送下一项、内部通信"
 publish_to: 'none'
-version: 1.4.0+1
+version: 1.4.2+1
 
 environment:
   sdk: ^3.12.2
@@ -12,8 +12,13 @@ dependencies:
   cupertino_icons: ^1.0.8
   web_socket_channel: ^3.0.2
   http: ^1.3.0
-# shared_preferences 已移除：代码里从未 import 过它（JWT 只存在内存里，
-# 登录态不跨进程保留）。留着会拖进 shared_preferences_android 这个原生模块，
+  # web 只被 lib/services/token_store_web.dart 用到（localStorage 存 JWT）。
+  # 导播端目前只发 Android 包，这一条是为将来出 Web 产物留的；
+  # 声明它是因为 dart:html 已废弃，Flutter Web 编译目标只认 package:web。
+  web: ^1.1.0
+# shared_preferences 已移除：这里只需要记住一个 JWT 字符串，改用
+# MainActivity 里的平台通道（见 lib/services/token_store_native.dart）。
+# shared_preferences 会拖进 shared_preferences_android 这个原生模块，
 # 而它在 Windows 上构建时会让 Kotlin 增量缓存崩掉（Could not close
 # incremental caches ... .tab），整个 assembleRelease 失败。
 
@@ -21,6 +26,17 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter_launcher_icons:
+  # 只配 Android：这两个应用都只发 APK，没有 ios/ 目录。
+  # 写上 `ios: true` 会让生成器去找 ios/Runner/Assets.xcassets/... 然后抛
+  # PathNotFoundException，图标一个都生成不出来。
+  android: "launcher_icon"
+  image_path: "assets/favicon.png"
+  # 自适应图标的背景色。不设的话背景会取图片左上角那个像素，
+  # 于是图标在不同机型上有一圈说不清的颜色。
+  adaptive_icon_background: "#1C1A1B"
 
 flutter:
   uses-material-design: true

@@ -14,11 +14,18 @@ class HomeScreen extends StatefulWidget {
   final String token;
   final Map<String, dynamic> user;
 
+  /// 可注入的 WebSocket 客户端，默认自己建一个。
+  ///
+  /// 留这个口子是为了 widget 测试：不替换掉的话 initState 会真的去连
+  /// wss://zhdb.647382.xyz，让测试依赖网络、变慢，离线环境下直接失败。
+  final WebSocketService? wsService;
+
   const HomeScreen({
     super.key,
     required this.apiService,
     required this.token,
     required this.user,
+    this.wsService,
   });
 
   @override
@@ -26,7 +33,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final WebSocketService _wsService = WebSocketService();
+  // late：字段初始化器里不能访问 widget，必须延迟到 State 挂载之后。
+  late final WebSocketService _wsService = widget.wsService ?? WebSocketService();
   final TextEditingController _chatInputController = TextEditingController();
   final ScrollController _chatScrollController = ScrollController();
 
@@ -91,7 +99,9 @@ class _HomeScreenState extends State<HomeScreen> {
         if (senderId == widget.user['id']) return;
         setState(() {
           _chatMessages.add(ChatMessage(
-            sender: '其他',
+            // 发送者名由服务端盖章（sender_name），不在这里猜。
+            // 老服务端不下发这个字段时退回角色名，至少比一律显示「其他」可辨认。
+            sender: _resolveSenderName(msg),
             content: payload['message'] ?? '',
             timestamp: DateTime.now(),
           ));
@@ -106,6 +116,43 @@ class _HomeScreenState extends State<HomeScreen> {
         _applyWelcomeState(msg['payload']);
       }
     });
+  }
+
+  /// 从广播消息里取出该显示的发送者名。
+  ///
+  /// 优先用服务端盖的 `sender_name`；它是登录账号的昵称/用户名，多端同场时
+  /// 只有它能区分「谁在说话」。拿不到时退回 `sender_role` 的中文名，
+  /// 再拿不到才显示「未知」——不要退回「其他」，那个词会把所有外来消息
+  /// 重新糊成一片，等于没有发送者。
+  String _resolveSenderName(Map<String, dynamic> msg) {
+    final name = msg['sender_name'];
+    if (name is String && name.isNotEmpty) return name;
+    final role = msg['sender_role'];
+    if (role is String && role.isNotEmpty) return _roleLabel(role);
+    return '未知';
+  }
+
+  /// WS 角色标识的中文名。
+  ///
+  /// 与后端 app/ws/hub.go 的 roleLabel 保持同一套词表：老服务端还没开始
+  /// 下发 sender_name 时，这是唯一能显示出发送者的信息。
+  String _roleLabel(String role) {
+    switch (role) {
+      case 'director':
+        return '导播';
+      case 'commentator':
+        return '解说';
+      case 'packaging':
+        return '包装';
+      case 'interviewer':
+        return '采访';
+      case 'admin':
+        return '管理员';
+      case 'super_admin':
+        return '超级管理员';
+      default:
+        return '未知';
+    }
   }
 
   /// 渲染欢迎消息里带的当前切台状态。
@@ -334,9 +381,10 @@ class _HomeScreenState extends State<HomeScreen> {
     // 本地立即显示（服务端回传会被过滤）
     setState(() {
       _chatMessages.add(ChatMessage(
-        sender: '我',
+        sender: widget.user['display_name'] ?? widget.user['username'] ?? '我',
         content: text,
         timestamp: DateTime.now(),
+        isMine: true,
       ));
     });
     _chatInputController.clear();
@@ -426,117 +474,180 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: Column(
+      // 按可用宽度选布局，不再让平板去拉伸手机竖屏布局。
+      //
+      // 之前只有一种布局，横向空间全给了聊天区，预设按钮网格被压成三列窄条，
+      // 分镜按钮点不准；同时固定高度控件（状态条 + 滑动确认 + 确认按钮 ≈ 164px）
+      // 在窗口高度低于约 500 时还会溢出 22px，控件被裁掉一半。
+      //
+      // 宽屏改成左右两栏：左栏是主操作流程（预设 + 切台确认），右栏是聊天。
+      // 每栏都拿到完整高度，上面那个溢出也随之消失。
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          if (_isWideLayout(constraints.maxWidth)) {
+            return _buildWideLayout();
+          }
+          return _buildNarrowLayout();
+        },
+      ),
+    );
+  }
+
+  /// 宽到足以并排显示两栏。
+  ///
+  /// 阈值取 720：低于它时两栏会各自窄到难以点击。手机横屏常见宽度是
+  /// 640~900，所以横屏手机也会走两栏；竖屏手机（< 500）保持单栏。
+  static bool _isWideLayout(double width) => width >= 720;
+
+  /// 左栏：预设按钮 + 切台确认。导播的主要操作都在这里。
+  Widget _buildSwitchColumn({int gridColumns = 3}) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      child: Column(
         children: [
-          // 版本提示放在最上面：低于最低适配版本时部分功能会异常，
-          // 导播员该在动手之前就看到，而不是等到某个功能不管用才发现。
-          VersionBanner(serverUrl: AppConfig.serverUrl),
-          // 项目选择
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: Colors.grey.shade900,
-            child: Row(
-              children: [
-                const Text('项目: ', style: TextStyle(color: Colors.white70)),
-                Expanded(
-                  child: DropdownButton<Project>(
-                    value: _selectedProject,
-                    isExpanded: true,
-                    dropdownColor: Colors.grey.shade800,
-                    style: const TextStyle(color: Colors.white),
-                    items: _projects.map((p) => DropdownMenuItem(
-                      value: p,
-                      child: Text(
-                        // 带上计划时间与状态：项目多了以后，光看名字分不清
-                        // 哪一场是现在这个。后端已经把当前/下一场排在最前。
-                        p.scheduleLabel.isEmpty ? p.name : '${p.name}  ·  ${p.scheduleLabel}',
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    )).toList(),
-                    onChanged: (p) {
-                      if (p != null) _onProjectChanged(p);
-                    },
-                  ),
-                ),
-              ],
+          // 预设按钮网格。机位列表来自项目配置（GET /api/projects/:id/cameras），
+          // 取不到时用兜底列表，不再是硬编码。
+          Expanded(
+            child: GridView.count(
+              crossAxisCount: gridColumns,
+              mainAxisSpacing: 8,
+              crossAxisSpacing: 8,
+              childAspectRatio: 2,
+              children: [for (final name in _presets) _presetButton(name)],
             ),
           ),
-
-          // 采访状态栏
-          InterviewStatusBar(
-            points: _interviewPoints,
-            hasLock: _hasLock,
+          const SizedBox(height: 8),
+          // 当前播送 / 即将切台状态条
+          _buildShotStateBar(),
+          const SizedBox(height: 8),
+          // 滑动确认：下发「即将切台」
+          SlideToConfirm(
+            onConfirm: _onSlideConfirm,
+            preview: _nextShotPreview,
+            enabled: _hasLock,
           ),
+          // 没有待切机位时按钮为 null，不放进 children。
+          // 用 null-aware 元素语法而不是 if + 空值检查，lint 也会认。
+          ?_buildConfirmButton(),
+        ],
+      ),
+    );
+  }
 
-          // 预设按钮区域 + 滑动确认
+  /// 「确认已切」按钮。
+  ///
+  /// 没有待切机位时不渲染：一个永远置灰、又占掉 52px 高度的按钮，在窄窗口下
+  /// 正是把下面几个控件挤出可视范围的那一环。要切台时它本来就会出现在滑动确认
+  /// 之后，不存在「需要它来提示可以切了」的场景。
+  Widget? _buildConfirmButton() {
+    if (!_pendingConfirm) return null;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: SizedBox(
+        width: double.infinity,
+        height: 44,
+        child: ElevatedButton.icon(
+          onPressed: _onConfirmSwitched,
+          icon: const Icon(Icons.check_circle_outline),
+          label: Text(
+            '确认已切: $_nextShotPreview',
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.green.shade700,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 项目选择栏。
+  ///
+  /// 两种布局都要用它，所以单独抽出来。
+  Widget _buildProjectSelector() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: Colors.grey.shade900,
+      child: Row(
+        children: [
+          const Text('项目: ', style: TextStyle(color: Colors.white70)),
           Expanded(
-            flex: 3,
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                children: [
-                  // 预设按钮网格。机位列表来自项目配置（GET /api/projects/:id/cameras），
-                  // 取不到时用兜底列表，不再是硬编码。
-                  Expanded(
-                    child: GridView.count(
-                      crossAxisCount: 3,
-                      mainAxisSpacing: 8,
-                      crossAxisSpacing: 8,
-                      childAspectRatio: 2,
-                      children: [for (final name in _presets) _presetButton(name)],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  // 当前播送 / 即将切台状态条
-                  _buildShotStateBar(),
-                  const SizedBox(height: 8),
-                  // 滑动确认：下发「即将切台」
-                  SlideToConfirm(
-                    onConfirm: _onSlideConfirm,
-                    preview: _nextShotPreview,
-                    enabled: _hasLock,
-                  ),
-                  const SizedBox(height: 8),
-                  // 确认已切：把待切机位提升为「当前播送」
-                  SizedBox(
-                    width: double.infinity,
-                    height: 44,
-                    child: ElevatedButton.icon(
-                      onPressed: _pendingConfirm ? _onConfirmSwitched : null,
-                      icon: const Icon(Icons.check_circle_outline),
-                      label: Text(
-                        _nextShotPreview == null
-                            ? '确认已切'
-                            : '确认已切: $_nextShotPreview',
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green.shade700,
-                        disabledBackgroundColor: Colors.grey.shade800,
-                        disabledForegroundColor: Colors.grey.shade600,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
+            child: DropdownButton<Project>(
+              value: _selectedProject,
+              isExpanded: true,
+              dropdownColor: Colors.grey.shade800,
+              style: const TextStyle(color: Colors.white),
+              items: _projects
+                  .map((p) => DropdownMenuItem(
+                        value: p,
+                        child: Text(
+                          // 带上计划时间与状态：项目多了以后，光看名字分不清
+                          // 哪一场是现在这个。后端已经把当前/下一场排在最前。
+                          p.scheduleLabel.isEmpty
+                              ? p.name
+                              : '${p.name}  ·  ${p.scheduleLabel}',
+                          overflow: TextOverflow.ellipsis,
                         ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // 内部通信区
-          Expanded(
-            flex: 2,
-            child: ChatPanel(
-              messages: _chatMessages,
-              inputController: _chatInputController,
-              scrollController: _chatScrollController,
-              onSend: _sendChatMessage,
+                      ))
+                  .toList(),
+              onChanged: (p) {
+                if (p != null) _onProjectChanged(p);
+              },
             ),
           ),
         ],
       ),
+    );
+  }
+
+  /// 聊天栏。
+  Widget _buildChatPanel() {
+    return ChatPanel(
+      messages: _chatMessages,
+      inputController: _chatInputController,
+      scrollController: _chatScrollController,
+      onSend: _sendChatMessage,
+    );
+  }
+
+  /// 宽屏：左切换、右聊天。
+  Widget _buildWideLayout() {
+    return Column(
+      children: [
+        VersionBanner(serverUrl: AppConfig.serverUrl),
+        _buildProjectSelector(),
+        InterviewStatusBar(points: _interviewPoints, hasLock: _hasLock),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 左栏按 3:2 分给切换区与聊天区：切换区是主操作，且要放下
+              // 网格 + 状态条 + 滑动确认三样，聊天只是辅助沟通。
+              Expanded(flex: 3, child: _buildSwitchColumn(gridColumns: 4)),
+              const VerticalDivider(width: 1, color: Colors.white12),
+              Expanded(flex: 2, child: _buildChatPanel()),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 窄屏（竖屏手机）：单栏纵向堆叠。
+  Widget _buildNarrowLayout() {
+    return Column(
+      children: [
+        // 版本提示放在最上面：低于最低适配版本时部分功能会异常，
+        // 导播员该在动手之前就看到，而不是等到某个功能不管用才发现。
+        VersionBanner(serverUrl: AppConfig.serverUrl),
+        _buildProjectSelector(),
+        InterviewStatusBar(points: _interviewPoints, hasLock: _hasLock),
+        Expanded(flex: 3, child: _buildSwitchColumn()),
+        Expanded(flex: 2, child: _buildChatPanel()),
+      ],
     );
   }
 

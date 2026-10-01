@@ -3,7 +3,14 @@ import '../services/api_service.dart';
 import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  /// 与 MyApp 共用同一个实例。
+  ///
+  /// 刻意不自己 new 一个：令牌失效时 ApiService 会把界面打回这个页面，
+  /// 如果这里换了个新实例，打回来的登录页拿不到旧令牌，
+  /// 而旧实例上的 onUnauthorized 回调仍指向已经销毁的路由。
+  final ApiService apiService;
+
+  const LoginScreen({super.key, required this.apiService});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -12,7 +19,7 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _apiService = ApiService();
+  late final ApiService _apiService = widget.apiService;
   bool _loading = false;
   String? _error;
 

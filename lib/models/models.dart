@@ -129,9 +129,17 @@ class ChatMessage {
   final String content;
   final DateTime timestamp;
 
+  /// 是否是本机发的消息。
+  ///
+  /// 单独一个布尔量，而不是拿 `sender == '我'` 去比字符串：发送者名字
+  /// 现在来自服务端的 sender_name（可能是「张三」，也可能恰好就叫「我」），
+  /// 用文案当身份判据迟早会在某个人叫「我」时把他的消息染成蓝色。
+  final bool isMine;
+
   ChatMessage({
     required this.sender,
     required this.content,
     required this.timestamp,
+    this.isMine = false,
   });
 }

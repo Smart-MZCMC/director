@@ -9,11 +9,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:director/main.dart';
+import 'package:director/services/api_service.dart';
 
 void main() {
   testWidgets('Login screen renders', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+    // 传 restoredUser: null 才能落到登录页——这是「没有可恢复的登录态」
+    // 那条分支，登录页存在的全部意义就是它。
+    await tester.pumpWidget(
+      MyApp(apiService: ApiService(), restoredUser: null),
+    );
 
     expect(find.text('导播控制系统'), findsOneWidget);
     expect(find.widgetWithText(TextField, '用户名'), findsOneWidget);
