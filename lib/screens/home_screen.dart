@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../config.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
 import '../widgets/slide_to_confirm.dart';
 import '../widgets/interview_status_bar.dart';
 import '../widgets/chat_panel.dart';
+import '../widgets/version_banner.dart';
 
 class HomeScreen extends StatefulWidget {
   final ApiService apiService;
@@ -344,6 +346,9 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Column(
         children: [
+          // 版本提示放在最上面：低于最低适配版本时部分功能会异常，
+          // 导播员该在动手之前就看到，而不是等到某个功能不管用才发现。
+          VersionBanner(serverUrl: AppConfig.serverUrl),
           // 项目选择
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
