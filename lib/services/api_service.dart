@@ -25,16 +25,37 @@ class ApiService {
     throw Exception('登录失败: ${response.body}');
   }
 
+  /// 项目列表。
+  ///
+  /// 走 /api/projects 而不是 /api/admin/projects：后者挂在 RequireRole(admin)
+  /// 之后，导播的令牌拿到的一律是 403，下拉框恒定是空的。新接口只返回
+  /// 当前账号有权访问的项目，并且后端已按「当前/下一场优先」排好序。
   Future<List<Project>> getProjects() async {
     final response = await http.get(
-      Uri.parse('${AppConfig.serverUrl}/api/admin/projects'),
+      Uri.parse('${AppConfig.serverUrl}/api/projects'),
       headers: _headers,
     );
     if (response.statusCode == 200) {
-      final list = jsonDecode(response.body) as List;
+      final list = jsonDecode(utf8.decode(response.bodyBytes)) as List;
       return list.map((e) => Project.fromJson(e)).toList();
     }
-    throw Exception('获取项目列表失败');
+    throw Exception('获取项目列表失败 (HTTP ${response.statusCode})');
+  }
+
+  /// 项目的机位预设。
+  ///
+  /// 这些按钮此前是硬编码在 Dart 里的 10 个名字，换个场地就得改代码重新
+  /// 构建。现在由项目自己配置，后台可改。
+  Future<List<ProjectCamera>> getCameras(int projectId) async {
+    final response = await http.get(
+      Uri.parse('${AppConfig.serverUrl}/api/projects/$projectId/cameras'),
+      headers: _headers,
+    );
+    if (response.statusCode == 200) {
+      final list = jsonDecode(utf8.decode(response.bodyBytes)) as List;
+      return list.map((e) => ProjectCamera.fromJson(e)).toList();
+    }
+    throw Exception('获取机位预设失败 (HTTP ${response.statusCode})');
   }
 
   Future<List<InterviewPoint>> getInterviewStatuses(int projectId) async {
@@ -43,7 +64,7 @@ class ApiService {
       headers: _headers,
     );
     if (response.statusCode == 200) {
-      final list = jsonDecode(response.body) as List;
+      final list = jsonDecode(utf8.decode(response.bodyBytes)) as List;
       return list.map((e) => InterviewPoint.fromJson(e)).toList();
     }
     throw Exception('获取采访状态失败');

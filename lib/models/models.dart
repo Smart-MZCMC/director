@@ -27,11 +27,24 @@ class Project {
   final String code;
   final String description;
 
+  /// 计划时间窗与状态。后端按时间排序把「当前/下一场」置顶，这里只负责
+  /// 把它们显示出来，让导播在下拉框里一眼看出哪一场是现在这个。
+  final DateTime? scheduledStart;
+  final DateTime? scheduledEnd;
+  final String venue;
+  final String status;
+  final String mode;
+
   Project({
     required this.id,
     required this.name,
     required this.code,
     required this.description,
+    this.scheduledStart,
+    this.scheduledEnd,
+    this.venue = '',
+    this.status = '',
+    this.mode = '',
   });
 
   factory Project.fromJson(Map<String, dynamic> json) {
@@ -40,6 +53,50 @@ class Project {
       name: json['name'] ?? '',
       code: json['code'] ?? '',
       description: json['description'] ?? '',
+      scheduledStart: _parseTime(json['scheduled_start']),
+      scheduledEnd: _parseTime(json['scheduled_end']),
+      venue: json['venue'] ?? '',
+      status: json['status'] ?? '',
+      mode: json['mode'] ?? '',
+    );
+  }
+
+  static DateTime? _parseTime(dynamic value) {
+    if (value is! String || value.isEmpty) return null;
+    return DateTime.tryParse(value)?.toLocal();
+  }
+
+  /// 下拉框里的附加说明。没有日程时返回空串，不显示一个「未定」占位。
+  String get scheduleLabel {
+    final start = scheduledStart;
+    if (start == null) return '';
+    String two(int n) => n.toString().padLeft(2, '0');
+    final text = '${two(start.month)}-${two(start.day)} '
+        '${two(start.hour)}:${two(start.minute)}';
+    switch (status) {
+      case 'live':
+        return '直播中 · $text';
+      case 'finished':
+        return '已结束 · $text';
+      case 'cancelled':
+        return '已取消 · $text';
+      default:
+        return text;
+    }
+  }
+}
+
+/// 机位预设。后端按 sort_order 排好序，这里不再自己排。
+class ProjectCamera {
+  final int id;
+  final String name;
+
+  ProjectCamera({required this.id, required this.name});
+
+  factory ProjectCamera.fromJson(Map<String, dynamic> json) {
+    return ProjectCamera(
+      id: json['id'] ?? 0,
+      name: json['name'] ?? '',
     );
   }
 }

@@ -37,6 +37,13 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isConnected = false;
   final List<ChatMessage> _chatMessages = [];
 
+  /// 机位预设按钮。来自后端按项目配置的列表，不再硬编码在 Dart 里。
+  List<String> _presets = [];
+
+  /// 控制权心跳定时器。必须留住引用：之前它是在 initState 里就地创建的
+  /// Timer.periodic，没有字段也没有取消，页面销毁后仍在跑。
+  Timer? _lockHeartbeatTimer;
+
   /// 当前正在播送的机位。每次切台都会连同 [_nextShotPreview] 一起上报给后端。
   String _currentPlaying = '';
 
@@ -95,7 +102,26 @@ class _HomeScreenState extends State<HomeScreen> {
         _updateInterviewFromWS(payload);
       } else if (type == 'lock_update') {
         _refreshLockStatus();
+      } else if (type == 'system') {
+        _applyWelcomeState(msg['payload']);
       }
+    });
+  }
+
+  /// 渲染欢迎消息里带的当前切台状态。
+  ///
+  /// 后端在每次连接（含断线重连）时都会把 project_states 里的当前状态放进
+  /// 第一条 system 消息。没有这一步的话，本端重连后会把自己清空成「未指定」，
+  /// 直到下一次切台才恢复——而「下一次切台」可能还要等很久。
+  void _applyWelcomeState(dynamic rawPayload) {
+    if (rawPayload is! Map) return;
+    if (rawPayload['state_available'] != true) return;
+    final current = (rawPayload['current_shot'] ?? '') as String;
+    final next = (rawPayload['next_shot'] ?? '') as String;
+    if (!mounted) return;
+    setState(() {
+      _currentPlaying = current;
+      _nextShotPreview = next.isEmpty ? null : next;
     });
   }
 
@@ -130,6 +156,9 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _projects = projects;
         if (projects.isNotEmpty) {
+          // 取第一个。后端已按「正在直播 > 即将开始 > 无日程 > 已结束」排序，
+          // 所以这不再是「ID 最小的那个」——那个规则没有任何时间含义，
+          // 谁先建谁常驻，赛程换了还得手动去选。
           _selectedProject = projects.first;
           _onProjectChanged(projects.first);
         }
@@ -145,6 +174,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _nextShotPreview = null;
       // 换项目意味着换一套切台状态，本地记录不再成立。
       _currentPlaying = '';
+      _presets = [];
     });
 
     // 断开旧连接，用正确的 projectId 重新连接
@@ -158,13 +188,64 @@ class _HomeScreenState extends State<HomeScreen> {
       // ignore
     }
 
+    await _loadCameras(project.id);
     _refreshLockStatus();
   }
 
+  /// 拉取项目配置的机位预设。
+  ///
+  /// 失败时退回原来的 10 个名字而不是留一个空按钮区：导播在直播中需要的
+  /// 是一个「大概能用」的按钮矩阵，不是一个空白页面。
+  Future<void> _loadCameras(int projectId) async {
+    List<String> names = [];
+    try {
+      final cameras = await widget.apiService.getCameras(projectId);
+      names = cameras.map((c) => c.name).where((n) => n.isNotEmpty).toList();
+    } catch (e) {
+      // ignore
+    }
+    if (!mounted) return;
+    setState(() {
+      _presets = names.isNotEmpty ? names : _fallbackPresets;
+    });
+  }
+
+  /// 取不到项目机位配置时的兜底按钮。与 B3 之前的硬编码列表一致，
+  /// 这样即使后端还没升级，导播端也不会变成一个空界面。
+  static const List<String> _fallbackPresets = [
+    '全景',
+    '50米',
+    '100米',
+    '1000米',
+    '20×50接力',
+    '跳远',
+    '跳高',
+    '跳长绳',
+    '韵律操',
+    '领导讲话',
+  ];
+
+  /// 控制权心跳。
+  ///
+  /// 响应**必须**检查：锁过期或被别的导播抢走后，后端会回
+  /// 「未持有控制权，需重新获取」。此前这个返回值被直接丢掉，导播会一直
+  /// 以为自己还持有控制权、继续按切台键，而每次切台都被服务端拒绝，
+  /// 现场表现为「按钮按了没反应」。
   void _startLockHeartbeat() {
-    Timer.periodic(const Duration(seconds: 30), (_) {
-      if (_hasLock && _selectedProject != null) {
-        widget.apiService.heartbeat(_selectedProject!.id);
+    _lockHeartbeatTimer?.cancel();
+    _lockHeartbeatTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      final project = _selectedProject;
+      if (!_hasLock || project == null) return;
+
+      try {
+        final result = await widget.apiService.heartbeat(project.id);
+        final error = result['error'];
+        if (error == null) return;
+        if (!mounted) return;
+        setState(() => _hasLock = false);
+        _showToast('控制权已丢失：$error');
+      } catch (e) {
+        // 网络抖动不该把人踢下线，等下一轮心跳或 lock_update 广播再说。
       }
     });
   }
@@ -282,6 +363,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _lockHeartbeatTimer?.cancel();
     _wsService.dispose();
     _chatInputController.dispose();
     _chatScrollController.dispose();
@@ -364,7 +446,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     style: const TextStyle(color: Colors.white),
                     items: _projects.map((p) => DropdownMenuItem(
                       value: p,
-                      child: Text(p.name),
+                      child: Text(
+                        // 带上计划时间与状态：项目多了以后，光看名字分不清
+                        // 哪一场是现在这个。后端已经把当前/下一场排在最前。
+                        p.scheduleLabel.isEmpty ? p.name : '${p.name}  ·  ${p.scheduleLabel}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     )).toList(),
                     onChanged: (p) {
                       if (p != null) _onProjectChanged(p);
@@ -388,25 +475,15 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: const EdgeInsets.all(12),
               child: Column(
                 children: [
-                  // 预设按钮网格
+                  // 预设按钮网格。机位列表来自项目配置（GET /api/projects/:id/cameras），
+                  // 取不到时用兜底列表，不再是硬编码。
                   Expanded(
                     child: GridView.count(
                       crossAxisCount: 3,
                       mainAxisSpacing: 8,
                       crossAxisSpacing: 8,
                       childAspectRatio: 2,
-                      children: [
-                        _presetButton('全景'),
-                        _presetButton('50米'),
-                        _presetButton('100米'),
-                        _presetButton('1000米'),
-                        _presetButton('20×50接力'),
-                        _presetButton('跳远'),
-                        _presetButton('跳高'),
-                        _presetButton('跳长绳'),
-                        _presetButton('韵律操'),
-                        _presetButton('领导讲话'),
-                      ],
+                      children: [for (final name in _presets) _presetButton(name)],
                     ),
                   ),
                   const SizedBox(height: 8),
